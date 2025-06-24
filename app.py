@@ -34,7 +34,20 @@ st.markdown("---")
 st.header("Step 2: Annotate Pattern Image")
 
 if pattern_img:
-    st.write("Draw bounding boxes around objects of interest in the pattern image.")
+    st.write("Draw shapes around objects of interest in the pattern image.")
+    drawing_mode = st.selectbox(
+        "Select annotation shape",
+        ["rect", "circle", "polygon", "freedraw", "line", "transform"],
+        format_func=lambda x: {
+            "rect": "Rectangle",
+            "circle": "Circle/Ellipse",
+            "polygon": "Polygon (e.g., rhombus)",
+            "freedraw": "Free Draw",
+            "line": "Line",
+            "transform": "Move/Resize"
+        }[x],
+        index=0
+    )
     canvas_result = st_canvas(
         fill_color="rgba(255, 0, 0, 0.3)",  # Red with alpha
         stroke_width=2,
@@ -42,31 +55,61 @@ if pattern_img:
         update_streamlit=True,
         height=pattern_img.height,
         width=pattern_img.width,
-        drawing_mode="rect",
+        drawing_mode=drawing_mode,
         key="canvas",
     )
     if canvas_result.json_data:
-        st.subheader("Annotation Data (Bounding Boxes)")
+        st.subheader("Annotation Data (Raw JSON)")
         st.json(canvas_result.json_data)
 
-        # # Extract bounding boxes in two formats
-        # shapes = canvas_result.json_data.get("objects", [])
-        # bbox_dicts = []
-        # bbox_tuples = []
-        # for obj in shapes:
-        #     if obj.get("type") == "rect":
-        #         left = int(obj["left"])
-        #         top = int(obj["top"])
-        #         width = int(obj["width"])
-        #         height = int(obj["height"])
-        #         bbox_dicts.append({"x": left, "y": top, "width": width, "height": height})
-        #         bbox_tuples.append((left, top, width, height))
+        # Extract and display shape data in a user-friendly way
+        shapes = canvas_result.json_data.get("objects", [])
+        shape_list = []
+        for obj in shapes:
+            shape_type = obj.get("type")
+            if shape_type == "rect":
+                shape_list.append({
+                    "type": "rect",
+                    "x": int(obj["left"]),
+                    "y": int(obj["top"]),
+                    "width": int(obj["width"]),
+                    "height": int(obj["height"])
+                })
+            elif shape_type == "circle":
+                rx = obj.get("rx")
+                ry = obj.get("ry")
+                if rx is not None and ry is not None:
+                    shape_list.append({
+                        "type": "circle",
+                        "center_x": int(obj["left"] + rx),
+                        "center_y": int(obj["top"] + ry),
+                        "radius_x": int(rx),
+                        "radius_y": int(ry)
+                    })
+                else:
+                    shape_list.append({"type": "circle", **obj})
+            elif shape_type == "polygon":
+                shape_list.append({
+                    "type": "polygon",
+                    "points": obj.get("path", [])
+                })
+            elif shape_type == "line":
+                shape_list.append({
+                    "type": "line",
+                    "start": obj.get("x1", None),
+                    "end": obj.get("x2", None)
+                })
+            elif shape_type == "path":  # Free draw
+                shape_list.append({
+                    "type": "freedraw",
+                    "path": obj.get("path", [])
+                })
+            else:
+                shape_list.append({"type": shape_type, **obj})
 
-        # st.markdown("**Bounding Boxes (as list of dicts):**")
-        # st.write(bbox_dicts)
-        # st.markdown("**Bounding Boxes (as list of tuples):**")
-        # st.write(bbox_tuples)
+        st.markdown("**Extracted Shapes:**")
+        st.write(shape_list)
     else:
-        st.info("Draw bounding boxes to annotate objects.")
+        st.info("Draw shapes to annotate objects.")
 else:
     st.info("Upload a pattern image to enable annotation.") 
