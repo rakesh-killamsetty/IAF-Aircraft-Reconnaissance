@@ -1,3 +1,9 @@
 streamlit
+torch
+opencv-python
+segment-anything
 streamlit-drawable-canvas
 Pillow 
+scikit-image
+torchvision
+transformers
