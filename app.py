@@ -139,7 +139,7 @@ def sliding_window_similarity(query_img, pattern_embedding, model, processor, wi
         for j, x in enumerate(range(0, W - window_size + 1, stride)):
             patch = query_img.crop((x, y, x + window_size, y + window_size))
             patch_emb = get_dinov2_embedding(patch, model, processor)
-            dist = l2_distance(pattern_embedding, patch_emb)
+            dist = 1 - cosine_similarity(pattern_embedding, patch_emb)
             similarity_map[i, j] = dist
             if dist < min_dist:
                 min_dist = dist
@@ -435,8 +435,8 @@ if query_img is not None and "pattern_embedding" in st.session_state:
                 continue  # Lowered minimum size
             patch = query_img.crop((x0, y0, x1, y1))
             region_emb = get_dinov2_embedding(patch, model, processor)
-            dist = l2_distance(pattern_embedding, region_emb)
-            conf = 1 / (1 + dist)
+            dist = 1 - cosine_similarity(pattern_embedding, region_emb)  # Use 1 - cosine similarity as distance
+            conf = cosine_similarity(pattern_embedding, region_emb)      # Confidence is the similarity
             region_boxes.append((x0, y0, x1, y1))
             region_distances.append(dist)
             region_confidences.append(conf)
@@ -483,7 +483,7 @@ if query_img is not None and "pattern_embedding" in st.session_state:
         draw_filtered = ImageDraw.Draw(all_filtered_img)
         for box, dist, conf in zip(filtered_boxes, filtered_distances, filtered_confidences):
             draw_filtered.rectangle(box, outline="blue", width=2)
-            draw_filtered.text((box[0], box[1]), f"L2: {dist:.2f}\nConf: {conf:.2f}", fill="cyan")
+            draw_filtered.text((box[0], box[1]), f"Cosine: {dist:.2f}\nConf: {conf:.2f}", fill="cyan")
         st.image(all_filtered_img, caption=f"All Filtered Boxes Before NMS (Total: {len(filtered_boxes)})", use_column_width=True)
         # 4. Apply NMS
         nms_iou = st.slider("NMS IoU Threshold (region proposals)", min_value=0.1, max_value=0.9, value=0.3, step=0.02)
@@ -491,14 +491,49 @@ if query_img is not None and "pattern_embedding" in st.session_state:
         nms_boxes = [filtered_boxes[k] for k in keep_indices]
         nms_distances = [filtered_distances[k] for k in keep_indices]
         nms_confidences = [filtered_confidences[k] for k in keep_indices]
-        # 5. Draw results after NMS (expand boxes)
-        all_boxes_img = query_img.copy()
-        draw_all = ImageDraw.Draw(all_boxes_img)
-        img_w, img_h = all_boxes_img.size
-        for box, dist, conf in zip(nms_boxes, nms_distances, nms_confidences):
-            exp_box = expand_box(box, 0.1, img_w, img_h)  # Expand by 10%
-            draw_all.rectangle(exp_box, outline="orange", width=2)
-            draw_all.text((exp_box[0], exp_box[1]), f"L2: {dist:.2f}\nConf: {conf:.2f}", fill="yellow")
-        st.image(all_boxes_img, caption=f"Query Image with Region Proposal Matches After NMS (Total: {len(nms_boxes)})", use_column_width=True)
+        # 5. Segment detected regions using SAM and overlay masks
+        # Prepare bounding boxes for SAM (x, y, width, height)
+        sam_bboxes = []
+        for box in nms_boxes:
+            x0, y0, x1, y1 = box
+            sam_bboxes.append({
+                "x": int(x0),
+                "y": int(y0),
+                "width": int(x1 - x0),
+                "height": int(y1 - y0)
+            })
+        if sam_bboxes:
+            st.markdown("---")
+            st.subheader("Segmenting Detected Regions with SAM")
+            with st.spinner("Loading SAM model and segmenting detected regions..."):
+                predictor = load_sam_model()
+                masks = run_sam_on_bboxes(query_img, sam_bboxes, predictor)
+                # Overlay all masks on the query image
+                overlay_img = query_img.convert("RGBA")
+                from PIL import Image as PILImage, ImageDraw, ImageFont
+                import random
+                mask_scores = nms_distances  # 1 - cosine similarity for each mask
+                for i, (mask, score) in enumerate(zip(masks, mask_scores)):
+                    # Use a different color for each mask
+                    color = tuple([random.randint(0,255) for _ in range(3)])
+                    overlay_img = overlay_mask_on_image(overlay_img, mask, color=color, alpha=0.4)
+                    # Draw the score text at the top-left of the mask's bounding box with larger font and high-contrast color
+                    x = sam_bboxes[i]["x"]
+                    y = sam_bboxes[i]["y"]
+                    draw = ImageDraw.Draw(overlay_img)
+                    try:
+                        font = ImageFont.truetype("arial.ttf", 28)
+                    except:
+                        font = ImageFont.load_default()
+                    # Draw black outline for contrast
+                    for dx in [-1, 0, 1]:
+                        for dy in [-1, 0, 1]:
+                            if dx != 0 or dy != 0:
+                                draw.text((x+dx, y+dy), f"Dist: {score:.2f}", font=font, fill="black")
+                    # Draw main text in white
+                    draw.text((x, y), f"Dist: {score:.2f}", font=font, fill="white")
+                st.image(overlay_img, caption=f"Query Image with Segmented Matches (Total: {len(masks)})", use_column_width=True)
+        else:
+            st.info("No regions to segment.")
 else:
     st.info("Upload a pattern image to enable annotation.") 
