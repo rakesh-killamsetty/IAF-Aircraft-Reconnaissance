@@ -8,10 +8,16 @@ import os
 from PIL import ImageDraw
 import matplotlib.pyplot as plt
 from skimage.transform import resize
+from streamlit import columns
+from segment_anything import SamAutomaticMaskGenerator
 
 # --- Streamlit page config and title ---
 st.set_page_config(page_title="Aerial Pattern Detection Prototype", layout="wide")
 st.title("Pattern-Based Object Detection Prototype")
+
+# --- Device selection for GPU/CPU ---
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+st.write(f"Using device: {device}")
 
 # --- Step 1: Upload Images ---
 # Upload and display pattern and query images for annotation and detection.
@@ -48,6 +54,7 @@ def load_sam_model(checkpoint_path="./sam_vit_h.pth"):
     # Load the SAM model for segmentation
     from segment_anything import sam_model_registry, SamPredictor
     sam = sam_model_registry["vit_h"](checkpoint=checkpoint_path)
+    sam.to(device)
     predictor = SamPredictor(sam)
     return predictor
 
@@ -86,8 +93,9 @@ def overlay_mask_on_image(image_pil, mask, color=(255, 0, 0), alpha=0.4):
 def load_dinov2_model():
     # Load the DINOv2 model for embedding extraction
     from transformers import AutoImageProcessor, AutoModel
-    processor = AutoImageProcessor.from_pretrained("facebook/dinov2-base")
-    model = AutoModel.from_pretrained("facebook/dinov2-base")
+    processor = AutoImageProcessor.from_pretrained("facebook/dinov2-large")
+    model = AutoModel.from_pretrained("facebook/dinov2-large")
+    model.to(device)
     return model, processor
 
 def extract_object_region(image_pil, mask):
@@ -109,10 +117,10 @@ def extract_object_region(image_pil, mask):
 def get_dinov2_embedding(image_pil, model, processor):
     # Get the DINOv2 embedding for a given image region
     import torch
-    inputs = processor(images=image_pil, return_tensors="pt")
+    inputs = processor(images=image_pil, return_tensors="pt").to(device)
     with torch.no_grad():
         outputs = model(**inputs)
-    embedding = outputs.last_hidden_state.mean(dim=1).cpu().numpy().flatten()
+    embedding = outputs.last_hidden_state.mean(dim=1).detach().cpu().numpy().flatten()
     return embedding
 
 def cosine_similarity(a, b):
@@ -173,106 +181,6 @@ def nms(boxes, scores, iou_threshold=0.3):
         inds = np.where(ovr <= iou_threshold)[0]
         order = order[inds + 1]
     return keep
-
-def get_region_proposals(image_pil, mode='fast', max_regions=1000):
-    # Generate region proposals using OpenCV Selective Search
-    import cv2
-    image = np.array(image_pil)
-    if image.shape[2] == 4:
-        image = image[:, :, :3]
-    ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
-    ss.setBaseImage(image)
-    if mode == 'fast':
-        ss.switchToSelectiveSearchFast()
-    else:
-        ss.switchToSelectiveSearchQuality()
-    rects = ss.process()
-    return rects[:max_regions]
-
-def get_multiscale_region_proposals(image_pil, mode='fast', max_regions=2000, scales=[1.0, 0.85, 0.7, 0.5, 0.35]):
-    # Generate region proposals at multiple scales and combine them
-    import cv2
-    import numpy as np
-    image = np.array(image_pil)
-    if image.shape[2] == 4:
-        image = image[:, :, :3]
-    all_rects = []
-    H, W = image.shape[:2]
-    for scale in scales:
-        if scale != 1.0:
-            scaled_img = cv2.resize(image, (int(W * scale), int(H * scale)), interpolation=cv2.INTER_LINEAR)
-        else:
-            scaled_img = image
-        ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
-        ss.setBaseImage(scaled_img)
-        if mode == 'fast':
-            ss.switchToSelectiveSearchFast()
-        else:
-            ss.switchToSelectiveSearchQuality()
-        rects = ss.process()
-        for (x, y, w, h) in rects:
-            x0 = int(x / scale)
-            y0 = int(y / scale)
-            x1 = int((x + w) / scale)
-            y1 = int((y + h) / scale)
-            all_rects.append((x0, y0, x1 - x0, y1 - y0))
-        if len(all_rects) >= max_regions:
-            break
-    return all_rects[:max_regions]
-
-def sliding_window_supplement(image_pil, window_sizes=[64, 96, 128, 160, 192], stride_ratio=0.5):
-    # Supplement region proposals with sliding windows at multiple sizes
-    import numpy as np
-    image = np.array(image_pil)
-    H, W = image.shape[:2]
-    rects = []
-    for ws in window_sizes:
-        stride = int(ws * stride_ratio)
-        for y in range(0, H - ws + 1, stride):
-            for x in range(0, W - ws + 1, stride):
-                rects.append((x, y, ws, ws))
-    return rects
-
-def expand_box(box, expand_ratio, img_w, img_h):
-    # Expand a box by a given ratio, clipped to image bounds
-    x0, y0, x1, y1 = box
-    w = x1 - x0
-    h = y1 - y0
-    dx = int(w * expand_ratio)
-    dy = int(h * expand_ratio)
-    nx0 = max(0, x0 - dx)
-    ny0 = max(0, y0 - dy)
-    nx1 = min(img_w, x1 + dx)
-    ny1 = min(img_h, y1 + dy)
-    return (nx0, ny0, nx1, ny1)
-
-def deduplicate_boxes(boxes, iou_thresh=0.7):
-    # Remove duplicate/overlapping boxes using simple NMS
-    if not boxes:
-        return []
-    import numpy as np
-    boxes = np.array(boxes)
-    x1 = boxes[:, 0]
-    y1 = boxes[:, 1]
-    x2 = boxes[:, 2]
-    y2 = boxes[:, 3]
-    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
-    order = np.argsort(-areas)  # largest first
-    keep = []
-    while order.size > 0:
-        i = order[0]
-        keep.append(i)
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-        w = np.maximum(0.0, xx2 - xx1 + 1)
-        h = np.maximum(0.0, yy2 - yy1 + 1)
-        inter = w * h
-        ovr = inter / (areas[i] + areas[order[1:]] - inter)
-        inds = np.where(ovr <= iou_thresh)[0]
-        order = order[inds + 1]
-    return [tuple(map(int, boxes[i])) for i in keep]
 
 # --- Pattern Image Annotation and SAM Segmentation ---
 if pattern_img:
@@ -387,16 +295,11 @@ if pattern_img:
                     pattern_embedding = get_dinov2_embedding(st.session_state["object_img"], model, processor)
                     st.session_state["pattern_embedding"] = pattern_embedding
                     st.write("Object Embedding (DINOv2):")
-                    st.write(pattern_embedding)
+                    st.write(f"Embedding shape: {pattern_embedding.shape}")
+                    st.text_area("Pattern Embedding (all dimensions)", ', '.join([f'{v:.4f}' for v in pattern_embedding]), height=80)
                     st.success("Pattern object embedding extracted and saved.")
 # --- Step 3: Detection and Visualization ---
 if query_img is not None and "pattern_embedding" in st.session_state:
-    # --- User controls for detection parameters ---
-    st.markdown("**Detection Parameters**")
-    window_size = st.slider("Sliding Window Size (pixels)", min_value=32, max_value=256, value=64, step=16)  # Window size for sliding window
-    stride = window_size // 2  # Stride for sliding window
-    nms_iou = st.slider("NMS IoU Threshold", min_value=0.1, max_value=0.9, value=0.3, step=0.05)  # IoU threshold for NMS
-    # --- Region Proposal + DINOv2 Embedding Matching Pipeline ---
     st.markdown("---")
     st.header("Step 4: Region Proposal + Pattern Matching")
     # Option to select Selective Search mode
@@ -435,8 +338,8 @@ if query_img is not None and "pattern_embedding" in st.session_state:
                 continue  # Lowered minimum size
             patch = query_img.crop((x0, y0, x1, y1))
             region_emb = get_dinov2_embedding(patch, model, processor)
-            dist = 1 - cosine_similarity(pattern_embedding, region_emb)  # Use 1 - cosine similarity as distance
-            conf = cosine_similarity(pattern_embedding, region_emb)      # Confidence is the similarity
+            dist = l2_distance(pattern_embedding, region_emb)
+            conf = 1 / (1 + dist)
             region_boxes.append((x0, y0, x1, y1))
             region_distances.append(dist)
             region_confidences.append(conf)
@@ -483,7 +386,7 @@ if query_img is not None and "pattern_embedding" in st.session_state:
         draw_filtered = ImageDraw.Draw(all_filtered_img)
         for box, dist, conf in zip(filtered_boxes, filtered_distances, filtered_confidences):
             draw_filtered.rectangle(box, outline="blue", width=2)
-            draw_filtered.text((box[0], box[1]), f"Cosine: {dist:.2f}\nConf: {conf:.2f}", fill="cyan")
+            draw_filtered.text((box[0], box[1]), f"L2: {dist:.2f}\nConf: {conf:.2f}", fill="cyan")
         st.image(all_filtered_img, caption=f"All Filtered Boxes Before NMS (Total: {len(filtered_boxes)})", use_column_width=True)
         # 4. Apply NMS
         nms_iou = st.slider("NMS IoU Threshold (region proposals)", min_value=0.1, max_value=0.9, value=0.3, step=0.02)
@@ -491,49 +394,14 @@ if query_img is not None and "pattern_embedding" in st.session_state:
         nms_boxes = [filtered_boxes[k] for k in keep_indices]
         nms_distances = [filtered_distances[k] for k in keep_indices]
         nms_confidences = [filtered_confidences[k] for k in keep_indices]
-        # 5. Segment detected regions using SAM and overlay masks
-        # Prepare bounding boxes for SAM (x, y, width, height)
-        sam_bboxes = []
-        for box in nms_boxes:
-            x0, y0, x1, y1 = box
-            sam_bboxes.append({
-                "x": int(x0),
-                "y": int(y0),
-                "width": int(x1 - x0),
-                "height": int(y1 - y0)
-            })
-        if sam_bboxes:
-            st.markdown("---")
-            st.subheader("Segmenting Detected Regions with SAM")
-            with st.spinner("Loading SAM model and segmenting detected regions..."):
-                predictor = load_sam_model()
-                masks = run_sam_on_bboxes(query_img, sam_bboxes, predictor)
-                # Overlay all masks on the query image
-                overlay_img = query_img.convert("RGBA")
-                from PIL import Image as PILImage, ImageDraw, ImageFont
-                import random
-                mask_scores = nms_distances  # 1 - cosine similarity for each mask
-                for i, (mask, score) in enumerate(zip(masks, mask_scores)):
-                    # Use a different color for each mask
-                    color = tuple([random.randint(0,255) for _ in range(3)])
-                    overlay_img = overlay_mask_on_image(overlay_img, mask, color=color, alpha=0.4)
-                    # Draw the score text at the top-left of the mask's bounding box with larger font and high-contrast color
-                    x = sam_bboxes[i]["x"]
-                    y = sam_bboxes[i]["y"]
-                    draw = ImageDraw.Draw(overlay_img)
-                    try:
-                        font = ImageFont.truetype("arial.ttf", 28)
-                    except:
-                        font = ImageFont.load_default()
-                    # Draw black outline for contrast
-                    for dx in [-1, 0, 1]:
-                        for dy in [-1, 0, 1]:
-                            if dx != 0 or dy != 0:
-                                draw.text((x+dx, y+dy), f"Dist: {score:.2f}", font=font, fill="black")
-                    # Draw main text in white
-                    draw.text((x, y), f"Dist: {score:.2f}", font=font, fill="white")
-                st.image(overlay_img, caption=f"Query Image with Segmented Matches (Total: {len(masks)})", use_column_width=True)
-        else:
-            st.info("No regions to segment.")
+        # 5. Draw results after NMS (expand boxes)
+        all_boxes_img = query_img.copy()
+        draw_all = ImageDraw.Draw(all_boxes_img)
+        img_w, img_h = all_boxes_img.size
+        for box, dist, conf in zip(nms_boxes, nms_distances, nms_confidences):
+            exp_box = expand_box(box, 0.1, img_w, img_h)  # Expand by 10%
+            draw_all.rectangle(exp_box, outline="orange", width=2)
+            draw_all.text((exp_box[0], exp_box[1]), f"L2: {dist:.2f}\nConf: {conf:.2f}", fill="yellow")
+        st.image(all_boxes_img, caption=f"Query Image with Region Proposal Matches After NMS (Total: {len(nms_boxes)})", use_column_width=True)
 else:
     st.info("Upload a pattern image to enable annotation.") 
