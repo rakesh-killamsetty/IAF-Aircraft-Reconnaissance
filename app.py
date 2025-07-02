@@ -15,6 +15,10 @@ from segment_anything import SamAutomaticMaskGenerator
 st.set_page_config(page_title="Aerial Pattern Detection Prototype", layout="wide")
 st.title("Pattern-Based Object Detection Prototype")
 
+# --- Device selection for GPU/CPU ---
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+st.write(f"Using device: {device}")
+
 # --- Step 1: Upload Images ---
 # Upload and display pattern and query images for annotation and detection.
 st.sidebar.header("Step 1: Upload Images")
@@ -50,6 +54,7 @@ def load_sam_model(checkpoint_path="./sam_vit_h.pth"):
     # Load the SAM model for segmentation
     from segment_anything import sam_model_registry, SamPredictor
     sam = sam_model_registry["vit_h"](checkpoint=checkpoint_path)
+    sam.to(device)
     predictor = SamPredictor(sam)
     return predictor
 
@@ -90,6 +95,7 @@ def load_dinov2_model():
     from transformers import AutoImageProcessor, AutoModel
     processor = AutoImageProcessor.from_pretrained("facebook/dinov2-large")
     model = AutoModel.from_pretrained("facebook/dinov2-large")
+    model.to(device)
     return model, processor
 
 def extract_object_region(image_pil, mask):
@@ -111,10 +117,10 @@ def extract_object_region(image_pil, mask):
 def get_dinov2_embedding(image_pil, model, processor):
     # Get the DINOv2 embedding for a given image region
     import torch
-    inputs = processor(images=image_pil, return_tensors="pt")
+    inputs = processor(images=image_pil, return_tensors="pt").to(device)
     with torch.no_grad():
         outputs = model(**inputs)
-    embedding = outputs.last_hidden_state.mean(dim=1).cpu().numpy().flatten()
+    embedding = outputs.last_hidden_state.mean(dim=1).detach().cpu().numpy().flatten()
     return embedding
 
 def cosine_similarity(a, b):
@@ -311,9 +317,10 @@ if query_img is not None and "pattern_embedding" in st.session_state:
             mask_generator = SamAutomaticMaskGenerator(
                 sam,
                 points_per_side=32,  # higher for more segments
-                pred_iou_thresh=0.0,  # allow all masks
-                stability_score_thresh=0.0,  # allow all masks
-                min_mask_region_area=0  # include even large background
+                pred_iou_thresh=0.88,  # higher threshold to avoid background
+                stability_score_thresh=0.92,  # higher threshold to avoid unstable/background masks
+                min_mask_region_area=500,  # filter out large background regions
+                # These settings help exclude the background from segmentation
             )
             masks = mask_generator.generate(image_np)
             st.write(f"Found {len(masks)} segments in query image.")
