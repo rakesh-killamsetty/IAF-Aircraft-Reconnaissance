@@ -36,24 +36,112 @@ with col1:
     if pattern_file:
         pattern_img = Image.open(pattern_file).convert("RGB")
         st.image(pattern_img, caption="Pattern Image", use_column_width=True)
-        # --- Contrastive Filter Option ---
-        apply_contrastive = st.checkbox("Apply Contrastive Filter to Pattern Image", value=False)
+        # --- Image Enhancement Options ---
+        st.subheader("Image Enhancement Options")
+        
+        # Contrastive Filter Option
+        apply_contrastive = st.checkbox("Apply Contrastive Filter", value=False)
+        clip_limit = 2.0
         if apply_contrastive:
-            def apply_contrastive_filter(img):
+            clip_limit = st.slider("CLAHE Clip Limit", min_value=1.0, max_value=10.0, value=2.0, step=0.1, key="clip_limit_pattern")
+        
+        # Edge Detection Options
+        apply_edge_detection = st.checkbox("Apply Edge Detection", value=False)
+        edge_method = None
+        if apply_edge_detection:
+            edge_method = st.selectbox(
+                "Edge Detection Method",
+                ["canny", "sobel", "laplacian", "scharr"],
+                format_func=lambda x: {
+                    "canny": "Canny Edge Detection",
+                    "sobel": "Sobel Edge Detection", 
+                    "laplacian": "Laplacian Edge Detection",
+                    "scharr": "Scharr Edge Detection"
+                }[x]
+            )
+        
+        # Apply filters if selected
+        if apply_contrastive or apply_edge_detection:
+            def apply_image_filters(img, contrastive=False, edge_detection=None, clip_limit=2.0):
                 import numpy as np
                 import cv2
                 img_np = np.array(img)
-                # Convert to LAB color space for better contrast manipulation
-                lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
-                l, a, b = cv2.split(lab)
-                # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to L-channel
-                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-                cl = clahe.apply(l)
-                limg = cv2.merge((cl, a, b))
-                enhanced_img = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
-                return Image.fromarray(enhanced_img)
-            filtered_pattern_img = apply_contrastive_filter(pattern_img)
-            st.image(filtered_pattern_img, caption="Contrastive Filtered Pattern Image", use_column_width=True)
+                
+                # Apply contrastive filter if selected
+                if contrastive:
+                    # Convert to LAB color space for better contrast manipulation
+                    lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
+                    l, a, b = cv2.split(lab)
+                    # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to L-channel
+                    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8,8))
+                    cl = clahe.apply(l)
+                    limg = cv2.merge((cl, a, b))
+                    img_np = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
+                
+                # Apply edge detection if selected
+                if edge_detection:
+                    # Convert to grayscale for edge detection
+                    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+                    
+                    if edge_detection == "canny":
+                        # Canny edge detection
+                        edges = cv2.Canny(gray, 50, 150)
+                        # Convert back to RGB and overlay on original
+                        edges_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
+                        # Blend edges with original image
+                        alpha = 0.7
+                        img_np = cv2.addWeighted(img_np, alpha, edges_rgb, 1-alpha, 0)
+                    
+                    elif edge_detection == "sobel":
+                        # Sobel edge detection
+                        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+                        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+                        sobel = np.sqrt(sobelx**2 + sobely**2)
+                        sobel = np.uint8(sobel * 255 / sobel.max())
+                        # Convert back to RGB and overlay
+                        sobel_rgb = cv2.cvtColor(sobel, cv2.COLOR_GRAY2RGB)
+                        alpha = 0.6
+                        img_np = cv2.addWeighted(img_np, alpha, sobel_rgb, 1-alpha, 0)
+                    
+                    elif edge_detection == "laplacian":
+                        # Laplacian edge detection
+                        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+                        laplacian = np.uint8(np.absolute(laplacian))
+                        # Convert back to RGB and overlay
+                        laplacian_rgb = cv2.cvtColor(laplacian, cv2.COLOR_GRAY2RGB)
+                        alpha = 0.5
+                        img_np = cv2.addWeighted(img_np, alpha, laplacian_rgb, 1-alpha, 0)
+                    
+                    elif edge_detection == "scharr":
+                        # Scharr edge detection
+                        scharrx = cv2.Scharr(gray, cv2.CV_64F, 1, 0)
+                        scharry = cv2.Scharr(gray, cv2.CV_64F, 0, 1)
+                        scharr = np.sqrt(scharrx**2 + scharry**2)
+                        scharr = np.uint8(scharr * 255 / scharr.max())
+                        # Convert back to RGB and overlay
+                        scharr_rgb = cv2.cvtColor(scharr, cv2.COLOR_GRAY2RGB)
+                        alpha = 0.6
+                        img_np = cv2.addWeighted(img_np, alpha, scharr_rgb, 1-alpha, 0)
+                
+                return Image.fromarray(img_np)
+            
+            # Apply filters
+            filtered_pattern_img = apply_image_filters(
+                pattern_img, 
+                contrastive=apply_contrastive, 
+                edge_detection=edge_method,
+                clip_limit=clip_limit
+            )
+            
+            # Create caption based on applied filters
+            caption_parts = []
+            if apply_contrastive:
+                caption_parts.append(f"Contrastive Filter (clipLimit={clip_limit:.1f})")
+            if apply_edge_detection:
+                caption_parts.append(f"{edge_method.title()} Edge Detection")
+            
+            caption = " + ".join(caption_parts) + " Applied"
+            st.image(filtered_pattern_img, caption=caption, use_column_width=True)
             st.session_state["pattern_img_for_annotation"] = filtered_pattern_img
         else:
             st.session_state["pattern_img_for_annotation"] = pattern_img
@@ -65,22 +153,113 @@ with col2:
     if query_file:
         query_img = Image.open(query_file).convert("RGB")
         st.image(query_img, caption="Query Image", use_column_width=True)
-        # --- Contrastive Filter Option for Query Image ---
-        apply_contrastive_query = st.checkbox("Apply Contrastive Filter to Query Image", value=False, key="contrastive_query")
+        # --- Image Enhancement Options for Query Image ---
+        st.subheader("Image Enhancement Options")
+        
+        # Contrastive Filter Option
+        apply_contrastive_query = st.checkbox("Apply Contrastive Filter", value=False, key="contrastive_query")
+        clip_limit_query = 2.0
         if apply_contrastive_query:
-            def apply_contrastive_filter(img):
+            clip_limit_query = st.slider("CLAHE Clip Limit", min_value=1.0, max_value=10.0, value=2.0, step=0.1, key="clip_limit_query")
+        
+        # Edge Detection Options
+        apply_edge_detection_query = st.checkbox("Apply Edge Detection", value=False, key="edge_detection_query")
+        edge_method_query = None
+        if apply_edge_detection_query:
+            edge_method_query = st.selectbox(
+                "Edge Detection Method",
+                ["canny", "sobel", "laplacian", "scharr"],
+                format_func=lambda x: {
+                    "canny": "Canny Edge Detection",
+                    "sobel": "Sobel Edge Detection", 
+                    "laplacian": "Laplacian Edge Detection",
+                    "scharr": "Scharr Edge Detection"
+                }[x],
+                key="edge_method_query"
+            )
+        
+        # Apply filters if selected
+        if apply_contrastive_query or apply_edge_detection_query:
+            def apply_image_filters(img, contrastive=False, edge_detection=None, clip_limit=2.0):
                 import numpy as np
                 import cv2
                 img_np = np.array(img)
-                lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
-                l, a, b = cv2.split(lab)
-                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-                cl = clahe.apply(l)
-                limg = cv2.merge((cl, a, b))
-                enhanced_img = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
-                return Image.fromarray(enhanced_img)
-            filtered_query_img = apply_contrastive_filter(query_img)
-            st.image(filtered_query_img, caption="Contrastive Filtered Query Image", use_column_width=True)
+                
+                # Apply contrastive filter if selected
+                if contrastive:
+                    # Convert to LAB color space for better contrast manipulation
+                    lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
+                    l, a, b = cv2.split(lab)
+                    # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to L-channel
+                    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8,8))
+                    cl = clahe.apply(l)
+                    limg = cv2.merge((cl, a, b))
+                    img_np = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
+                
+                # Apply edge detection if selected
+                if edge_detection:
+                    # Convert to grayscale for edge detection
+                    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+                    
+                    if edge_detection == "canny":
+                        # Canny edge detection
+                        edges = cv2.Canny(gray, 50, 150)
+                        # Convert back to RGB and overlay on original
+                        edges_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
+                        # Blend edges with original image
+                        alpha = 0.7
+                        img_np = cv2.addWeighted(img_np, alpha, edges_rgb, 1-alpha, 0)
+                    
+                    elif edge_detection == "sobel":
+                        # Sobel edge detection
+                        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+                        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+                        sobel = np.sqrt(sobelx**2 + sobely**2)
+                        sobel = np.uint8(sobel * 255 / sobel.max())
+                        # Convert back to RGB and overlay
+                        sobel_rgb = cv2.cvtColor(sobel, cv2.COLOR_GRAY2RGB)
+                        alpha = 0.6
+                        img_np = cv2.addWeighted(img_np, alpha, sobel_rgb, 1-alpha, 0)
+                    
+                    elif edge_detection == "laplacian":
+                        # Laplacian edge detection
+                        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+                        laplacian = np.uint8(np.absolute(laplacian))
+                        # Convert back to RGB and overlay
+                        laplacian_rgb = cv2.cvtColor(laplacian, cv2.COLOR_GRAY2RGB)
+                        alpha = 0.5
+                        img_np = cv2.addWeighted(img_np, alpha, laplacian_rgb, 1-alpha, 0)
+                    
+                    elif edge_detection == "scharr":
+                        # Scharr edge detection
+                        scharrx = cv2.Scharr(gray, cv2.CV_64F, 1, 0)
+                        scharry = cv2.Scharr(gray, cv2.CV_64F, 0, 1)
+                        scharr = np.sqrt(scharrx**2 + scharry**2)
+                        scharr = np.uint8(scharr * 255 / scharr.max())
+                        # Convert back to RGB and overlay
+                        scharr_rgb = cv2.cvtColor(scharr, cv2.COLOR_GRAY2RGB)
+                        alpha = 0.6
+                        img_np = cv2.addWeighted(img_np, alpha, scharr_rgb, 1-alpha, 0)
+                
+                return Image.fromarray(img_np)
+            
+            # Apply filters
+            filtered_query_img = apply_image_filters(
+                query_img, 
+                contrastive=apply_contrastive_query, 
+                edge_detection=edge_method_query,
+                clip_limit=clip_limit_query
+            )
+            
+            # Create caption based on applied filters
+            caption_parts = []
+            if apply_contrastive_query:
+                caption_parts.append(f"Contrastive Filter (clipLimit={clip_limit_query:.1f})")
+            if apply_edge_detection_query:
+                caption_parts.append(f"{edge_method_query.title()} Edge Detection")
+            
+            caption = " + ".join(caption_parts) + " Applied"
+            st.image(filtered_query_img, caption=caption, use_column_width=True)
             st.session_state["query_img_for_processing"] = filtered_query_img
         else:
             st.session_state["query_img_for_processing"] = query_img
@@ -434,11 +613,6 @@ if query_img is not None and "pattern_embedding" in st.session_state:
             detected = [r for r in results if r['l2_distance'] <= l2_thresh]
             st.write(f"Detected {len(detected)} similar objects (L2 ≤ {l2_thresh:.4f})")
             # Overlay detected segments on the query image
-            detected_mask = np.zeros(image_np.shape[:2], dtype=np.uint8)
-            for r in detected:
-                mask = masks[r['idx']]['segmentation']
-                detected_mask[mask > 0] = 255
-            # Draw bounding boxes for detected segments
             overlay_img = image_np.copy()
             bbox_list = []
             for r in detected:
@@ -449,7 +623,7 @@ if query_img is not None and "pattern_embedding" in st.session_state:
                     x_min, x_max = int(xs.min()), int(xs.max())
                     y_min, y_max = int(ys.min()), int(ys.max())
                     # Draw rectangle (bounding box) on overlay_img
-                    cv2.rectangle(overlay_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+                    # cv2.rectangle(overlay_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
                     confidence = 1 / (1 + r['l2_distance'])
                     bbox_list.append({
                         'x_min': x_min,
@@ -457,12 +631,22 @@ if query_img is not None and "pattern_embedding" in st.session_state:
                         'x_max': x_max,
                         'y_max': y_max,
                         'l2_distance': r['l2_distance'],
-                        'confidence': confidence
+                        'confidence': confidence,
+                        'idx': r['idx'],
+                        'region_img': r['region_img']
                     })
-            st.image(overlay_img, caption="Query Image with Bounding Boxes for Detected Similar Objects", use_column_width=True)
-            # Save bounding boxes to CSV and provide download option
+            # --- Apply NMS to bbox_list ---
             if bbox_list:
-                bbox_df = pd.DataFrame(bbox_list)
+                boxes = [(b['x_min'], b['y_min'], b['x_max'], b['y_max']) for b in bbox_list]
+                scores = [b['l2_distance'] for b in bbox_list]  # lower is better
+                keep_indices = nms(boxes, scores, iou_threshold=0.3)
+                nms_bboxes = [bbox_list[i] for i in keep_indices]
+                # Draw only NMS-filtered boxes
+                for b in nms_bboxes:
+                    cv2.rectangle(overlay_img, (b['x_min'], b['y_min']), (b['x_max'], b['y_max']), (0, 255, 0), 2)
+                st.image(overlay_img, caption="Query Image with NMS Bounding Boxes for Detected Similar Objects", use_column_width=True)
+                # Save NMS bounding boxes to CSV and provide download option
+                bbox_df = pd.DataFrame([{k: b[k] for k in ['x_min','y_min','x_max','y_max','l2_distance','confidence']} for b in nms_bboxes])
                 # Get query image name for file naming
                 query_img_name = None
                 if query_file is not None and hasattr(query_file, 'name'):
@@ -473,14 +657,13 @@ if query_img is not None and "pattern_embedding" in st.session_state:
                 bbox_df.to_csv(csv_buffer, index=False)
                 csv_bytes = csv_buffer.getvalue().encode('utf-8')
                 st.download_button(
-                    label=f"Download Bounding Boxes CSV ({query_img_name}.csv)",
+                    label=f"Download Bounding Boxes CSV ({query_img_name}_nms.csv)",
                     data=csv_bytes,
-                    file_name=f"{query_img_name}.csv",
+                    file_name=f"{query_img_name}_nms.csv",
                     mime='text/csv'
                 )
-            # Show each detected segment with confidence score
-            for r in detected:
-                confidence = 1 / (1 + r['l2_distance'])
-                st.image(r["region_img"], caption=f"Detected Segment #{r['idx']} | L2: {r['l2_distance']:.4f} | Confidence: {confidence:.2f}", use_column_width=False, width=128)
+                # Show each detected segment with confidence score (NMS only)
+                for b in nms_bboxes:
+                    st.image(b["region_img"], caption=f"Detected Segment #{b['idx']} | L2: {b['l2_distance']:.4f} | Confidence: {b['confidence']:.2f}", use_column_width=False, width=128)
 else:
     st.info("Upload a pattern image to enable annotation.") 
