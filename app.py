@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 from skimage.transform import resize
 from streamlit import columns
 from segment_anything import SamAutomaticMaskGenerator
+import pandas as pd
+import io
 
 # --- Streamlit page config and title ---
 st.set_page_config(page_title="Aerial Pattern Detection Prototype", layout="wide")
@@ -34,6 +36,115 @@ with col1:
     if pattern_file:
         pattern_img = Image.open(pattern_file).convert("RGB")
         st.image(pattern_img, caption="Pattern Image", use_column_width=True)
+        # --- Image Enhancement Options ---
+        st.subheader("Image Enhancement Options")
+        
+        # Contrastive Filter Option
+        apply_contrastive = st.checkbox("Apply Contrastive Filter", value=False)
+        clip_limit = 2.0
+        if apply_contrastive:
+            clip_limit = st.slider("CLAHE Clip Limit", min_value=1.0, max_value=10.0, value=2.0, step=0.1, key="clip_limit_pattern")
+        
+        # Edge Detection Options
+        apply_edge_detection = st.checkbox("Apply Edge Detection", value=False)
+        edge_method = None
+        if apply_edge_detection:
+            edge_method = st.selectbox(
+                "Edge Detection Method",
+                ["canny", "sobel", "laplacian", "scharr"],
+                format_func=lambda x: {
+                    "canny": "Canny Edge Detection",
+                    "sobel": "Sobel Edge Detection", 
+                    "laplacian": "Laplacian Edge Detection",
+                    "scharr": "Scharr Edge Detection"
+                }[x]
+            )
+        
+        # Apply filters if selected
+        if apply_contrastive or apply_edge_detection:
+            def apply_image_filters(img, contrastive=False, edge_detection=None, clip_limit=2.0):
+                import numpy as np
+                import cv2
+                img_np = np.array(img)
+                
+                # Apply contrastive filter if selected
+                if contrastive:
+                    # Convert to LAB color space for better contrast manipulation
+                    lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
+                    l, a, b = cv2.split(lab)
+                    # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to L-channel
+                    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8,8))
+                    cl = clahe.apply(l)
+                    limg = cv2.merge((cl, a, b))
+                    img_np = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
+                
+                # Apply edge detection if selected
+                if edge_detection:
+                    # Convert to grayscale for edge detection
+                    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+                    
+                    if edge_detection == "canny":
+                        # Canny edge detection
+                        edges = cv2.Canny(gray, 50, 150)
+                        # Convert back to RGB and overlay on original
+                        edges_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
+                        # Blend edges with original image
+                        alpha = 0.7
+                        img_np = cv2.addWeighted(img_np, alpha, edges_rgb, 1-alpha, 0)
+                    
+                    elif edge_detection == "sobel":
+                        # Sobel edge detection
+                        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+                        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+                        sobel = np.sqrt(sobelx**2 + sobely**2)
+                        sobel = np.uint8(sobel * 255 / sobel.max())
+                        # Convert back to RGB and overlay
+                        sobel_rgb = cv2.cvtColor(sobel, cv2.COLOR_GRAY2RGB)
+                        alpha = 0.6
+                        img_np = cv2.addWeighted(img_np, alpha, sobel_rgb, 1-alpha, 0)
+                    
+                    elif edge_detection == "laplacian":
+                        # Laplacian edge detection
+                        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+                        laplacian = np.uint8(np.absolute(laplacian))
+                        # Convert back to RGB and overlay
+                        laplacian_rgb = cv2.cvtColor(laplacian, cv2.COLOR_GRAY2RGB)
+                        alpha = 0.5
+                        img_np = cv2.addWeighted(img_np, alpha, laplacian_rgb, 1-alpha, 0)
+                    
+                    elif edge_detection == "scharr":
+                        # Scharr edge detection
+                        scharrx = cv2.Scharr(gray, cv2.CV_64F, 1, 0)
+                        scharry = cv2.Scharr(gray, cv2.CV_64F, 0, 1)
+                        scharr = np.sqrt(scharrx**2 + scharry**2)
+                        scharr = np.uint8(scharr * 255 / scharr.max())
+                        # Convert back to RGB and overlay
+                        scharr_rgb = cv2.cvtColor(scharr, cv2.COLOR_GRAY2RGB)
+                        alpha = 0.6
+                        img_np = cv2.addWeighted(img_np, alpha, scharr_rgb, 1-alpha, 0)
+                
+                return Image.fromarray(img_np)
+            
+            # Apply filters
+            filtered_pattern_img = apply_image_filters(
+                pattern_img, 
+                contrastive=apply_contrastive, 
+                edge_detection=edge_method,
+                clip_limit=clip_limit
+            )
+            
+            # Create caption based on applied filters
+            caption_parts = []
+            if apply_contrastive:
+                caption_parts.append(f"Contrastive Filter (clipLimit={clip_limit:.1f})")
+            if apply_edge_detection:
+                caption_parts.append(f"{edge_method.title()} Edge Detection")
+            
+            caption = " + ".join(caption_parts) + " Applied"
+            st.image(filtered_pattern_img, caption=caption, use_column_width=True)
+            st.session_state["pattern_img_for_annotation"] = filtered_pattern_img
+        else:
+            st.session_state["pattern_img_for_annotation"] = pattern_img
     else:
         st.info("Please upload a pattern image.")
 
@@ -42,6 +153,116 @@ with col2:
     if query_file:
         query_img = Image.open(query_file).convert("RGB")
         st.image(query_img, caption="Query Image", use_column_width=True)
+        # --- Image Enhancement Options for Query Image ---
+        st.subheader("Image Enhancement Options")
+        
+        # Contrastive Filter Option
+        apply_contrastive_query = st.checkbox("Apply Contrastive Filter", value=False, key="contrastive_query")
+        clip_limit_query = 2.0
+        if apply_contrastive_query:
+            clip_limit_query = st.slider("CLAHE Clip Limit", min_value=1.0, max_value=10.0, value=2.0, step=0.1, key="clip_limit_query")
+        
+        # Edge Detection Options
+        apply_edge_detection_query = st.checkbox("Apply Edge Detection", value=False, key="edge_detection_query")
+        edge_method_query = None
+        if apply_edge_detection_query:
+            edge_method_query = st.selectbox(
+                "Edge Detection Method",
+                ["canny", "sobel", "laplacian", "scharr"],
+                format_func=lambda x: {
+                    "canny": "Canny Edge Detection",
+                    "sobel": "Sobel Edge Detection", 
+                    "laplacian": "Laplacian Edge Detection",
+                    "scharr": "Scharr Edge Detection"
+                }[x],
+                key="edge_method_query"
+            )
+        
+        # Apply filters if selected
+        if apply_contrastive_query or apply_edge_detection_query:
+            def apply_image_filters(img, contrastive=False, edge_detection=None, clip_limit=2.0):
+                import numpy as np
+                import cv2
+                img_np = np.array(img)
+                
+                # Apply contrastive filter if selected
+                if contrastive:
+                    # Convert to LAB color space for better contrast manipulation
+                    lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
+                    l, a, b = cv2.split(lab)
+                    # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to L-channel
+                    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8,8))
+                    cl = clahe.apply(l)
+                    limg = cv2.merge((cl, a, b))
+                    img_np = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
+                
+                # Apply edge detection if selected
+                if edge_detection:
+                    # Convert to grayscale for edge detection
+                    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+                    
+                    if edge_detection == "canny":
+                        # Canny edge detection
+                        edges = cv2.Canny(gray, 50, 150)
+                        # Convert back to RGB and overlay on original
+                        edges_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
+                        # Blend edges with original image
+                        alpha = 0.7
+                        img_np = cv2.addWeighted(img_np, alpha, edges_rgb, 1-alpha, 0)
+                    
+                    elif edge_detection == "sobel":
+                        # Sobel edge detection
+                        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+                        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+                        sobel = np.sqrt(sobelx**2 + sobely**2)
+                        sobel = np.uint8(sobel * 255 / sobel.max())
+                        # Convert back to RGB and overlay
+                        sobel_rgb = cv2.cvtColor(sobel, cv2.COLOR_GRAY2RGB)
+                        alpha = 0.6
+                        img_np = cv2.addWeighted(img_np, alpha, sobel_rgb, 1-alpha, 0)
+                    
+                    elif edge_detection == "laplacian":
+                        # Laplacian edge detection
+                        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+                        laplacian = np.uint8(np.absolute(laplacian))
+                        # Convert back to RGB and overlay
+                        laplacian_rgb = cv2.cvtColor(laplacian, cv2.COLOR_GRAY2RGB)
+                        alpha = 0.5
+                        img_np = cv2.addWeighted(img_np, alpha, laplacian_rgb, 1-alpha, 0)
+                    
+                    elif edge_detection == "scharr":
+                        # Scharr edge detection
+                        scharrx = cv2.Scharr(gray, cv2.CV_64F, 1, 0)
+                        scharry = cv2.Scharr(gray, cv2.CV_64F, 0, 1)
+                        scharr = np.sqrt(scharrx**2 + scharry**2)
+                        scharr = np.uint8(scharr * 255 / scharr.max())
+                        # Convert back to RGB and overlay
+                        scharr_rgb = cv2.cvtColor(scharr, cv2.COLOR_GRAY2RGB)
+                        alpha = 0.6
+                        img_np = cv2.addWeighted(img_np, alpha, scharr_rgb, 1-alpha, 0)
+                
+                return Image.fromarray(img_np)
+            
+            # Apply filters
+            filtered_query_img = apply_image_filters(
+                query_img, 
+                contrastive=apply_contrastive_query, 
+                edge_detection=edge_method_query,
+                clip_limit=clip_limit_query
+            )
+            
+            # Create caption based on applied filters
+            caption_parts = []
+            if apply_contrastive_query:
+                caption_parts.append(f"Contrastive Filter (clipLimit={clip_limit_query:.1f})")
+            if apply_edge_detection_query:
+                caption_parts.append(f"{edge_method_query.title()} Edge Detection")
+            
+            caption = " + ".join(caption_parts) + " Applied"
+            st.image(filtered_query_img, caption=caption, use_column_width=True)
+            st.session_state["query_img_for_processing"] = filtered_query_img
+        else:
+            st.session_state["query_img_for_processing"] = query_img
     else:
         st.info("Please upload a query image.")
 
@@ -54,7 +275,6 @@ def load_sam_model(checkpoint_path="./sam_vit_h.pth"):
     # Load the SAM model for segmentation
     from segment_anything import sam_model_registry, SamPredictor
     sam = sam_model_registry["vit_h"](checkpoint=checkpoint_path)
-    sam.to(device)
     predictor = SamPredictor(sam)
     return predictor
 
@@ -95,7 +315,6 @@ def load_dinov2_model():
     from transformers import AutoImageProcessor, AutoModel
     processor = AutoImageProcessor.from_pretrained("facebook/dinov2-large")
     model = AutoModel.from_pretrained("facebook/dinov2-large")
-    model.to(device)
     return model, processor
 
 def extract_object_region(image_pil, mask):
@@ -117,10 +336,10 @@ def extract_object_region(image_pil, mask):
 def get_dinov2_embedding(image_pil, model, processor):
     # Get the DINOv2 embedding for a given image region
     import torch
-    inputs = processor(images=image_pil, return_tensors="pt").to(device)
+    inputs = processor(images=image_pil, return_tensors="pt")
     with torch.no_grad():
         outputs = model(**inputs)
-    embedding = outputs.last_hidden_state.mean(dim=1).detach().cpu().numpy().flatten()
+    embedding = outputs.last_hidden_state.mean(dim=1).cpu().numpy().flatten()
     return embedding
 
 def cosine_similarity(a, b):
@@ -147,7 +366,7 @@ def sliding_window_similarity(query_img, pattern_embedding, model, processor, wi
         for j, x in enumerate(range(0, W - window_size + 1, stride)):
             patch = query_img.crop((x, y, x + window_size, y + window_size))
             patch_emb = get_dinov2_embedding(patch, model, processor)
-            dist = 1 - cosine_similarity(pattern_embedding, patch_emb)
+            dist = l2_distance(pattern_embedding, patch_emb)
             similarity_map[i, j] = dist
             if dist < min_dist:
                 min_dist = dist
@@ -198,20 +417,21 @@ if pattern_img:
         }[x],
         index=0
     )
+    # Use the filtered or original image for annotation
+    pattern_img_for_annotation = st.session_state.get("pattern_img_for_annotation", pattern_img)
     canvas_result = st_canvas(
         fill_color="rgba(255, 0, 0, 0.3)",  # Red with alpha
         stroke_width=2,
-        background_image=pattern_img,
+        background_image=pattern_img_for_annotation,
         update_streamlit=True,
-        height=pattern_img.height,
-        width=pattern_img.width,
+        height=pattern_img_for_annotation.height,
+        width=pattern_img_for_annotation.width,
         drawing_mode=drawing_mode,
         key="canvas",
     )
     if canvas_result.json_data:
         st.subheader("Annotation Data (Raw JSON)")
         st.json(canvas_result.json_data)
-
         # --- Extract and display shape data in a user-friendly way ---
         shapes = canvas_result.json_data.get("objects", [])
         shape_list = []
@@ -256,10 +476,8 @@ if pattern_img:
                 })
             else:
                 shape_list.append({"type": shape_type, **obj})
-
         st.markdown("**Extracted Shapes:**")
         st.write(shape_list)
-
         # --- Extract rectangles for SAM ---
         rect_bboxes = [s for s in shape_list if s["type"] == "rect"]
         if rect_bboxes:
@@ -269,16 +487,18 @@ if pattern_img:
                 # Run SAM on the annotated bounding boxes
                 with st.spinner("Loading SAM model and segmenting..."):
                     predictor = load_sam_model()
-                    masks = run_sam_on_bboxes(pattern_img, rect_bboxes, predictor)
+                    # Use the filtered or original image for SAM
+                    pattern_img_for_sam = st.session_state.get("pattern_img_for_annotation", pattern_img)
+                    masks = run_sam_on_bboxes(pattern_img_for_sam, rect_bboxes, predictor)
                     mask_areas = [np.sum(m) for m in masks]
                     if mask_areas:
                         major_idx = int(np.argmax(mask_areas))
                         major_mask = masks[major_idx]
                         st.success(f"Major object region is in bounding box #{major_idx+1} (area: {mask_areas[major_idx]})")
-                        overlay_img = overlay_mask_on_image(pattern_img, major_mask)
+                        overlay_img = overlay_mask_on_image(pattern_img_for_sam, major_mask)
                         st.image(overlay_img, caption="Major Object Region (SAM Mask)", use_column_width=True)
                         # Extract and store the segmented region in session state
-                        object_img = extract_object_region(pattern_img, major_mask)
+                        object_img = extract_object_region(pattern_img_for_sam, major_mask)
                         if object_img is not None:
                             st.session_state["object_img"] = object_img
                             st.image(object_img, caption="Segmented Object Passed to DINOv2")
@@ -301,107 +521,149 @@ if pattern_img:
 # --- Step 3: Detection and Visualization ---
 if query_img is not None and "pattern_embedding" in st.session_state:
     st.markdown("---")
-    st.header("Step 4: Region Proposal + Pattern Matching")
-    # Option to select Selective Search mode
-    ss_mode = st.selectbox("Selective Search Mode", options=["fast", "quality"], index=0, help="'quality' is slower but may give better proposals.")
-    # Option to select proposal method
-    proposal_method = st.selectbox("Region Proposal Method", options=["Selective Search", "Sliding Window", "Both"], index=2)
-    # Slider for max proposals
-    max_proposals = st.slider("Max Region Proposals to Process", min_value=100, max_value=2000, value=500, step=50)
-    if st.button("Run Region Proposal + Pattern Matching"):
-        # 1. Get region proposals from the query image
-        st.info(f"Generating region proposals with {proposal_method}...")
-        rects = []
-        if proposal_method in ["Selective Search", "Both"]:
-            rects_ss = get_multiscale_region_proposals(query_img, mode=ss_mode, max_regions=2000, scales=[1.0, 0.85, 0.7, 0.5, 0.35])
-            rects += rects_ss
-        if proposal_method in ["Sliding Window", "Both"]:
-            rects_sw = sliding_window_supplement(query_img, window_sizes=[64, 96, 128, 160, 192], stride_ratio=0.5)
-            rects += rects_sw
-        st.write(f"Total region proposals before deduplication: {len(rects)}")
-        # Deduplicate proposals
-        dedup_boxes = deduplicate_boxes([(x, y, x + w, y + h) for (x, y, w, h) in rects], iou_thresh=0.7)
-        st.write(f"Region proposals after deduplication: {len(dedup_boxes)}")
-        # Limit to max_proposals
-        dedup_boxes = dedup_boxes[:max_proposals]
-        st.write(f"Region proposals to process: {len(dedup_boxes)}")
-        # 2. Extract DINOv2 embedding for each region
-        model, processor = load_dinov2_model()
-        pattern_embedding = st.session_state["pattern_embedding"]
-        region_boxes = []
-        region_distances = []
-        region_confidences = []
-        for (x0, y0, x1, y1) in dedup_boxes:
-            w = x1 - x0
-            h = y1 - y0
-            if w < 10 or h < 10:
-                continue  # Lowered minimum size
-            patch = query_img.crop((x0, y0, x1, y1))
-            region_emb = get_dinov2_embedding(patch, model, processor)
-            dist = l2_distance(pattern_embedding, region_emb)
-            conf = 1 / (1 + dist)
-            region_boxes.append((x0, y0, x1, y1))
-            region_distances.append(dist)
-            region_confidences.append(conf)
-        # Store results in session state for interactive thresholding
-        st.session_state["region_boxes"] = region_boxes
-        st.session_state["region_distances"] = region_distances
-        st.session_state["region_confidences"] = region_confidences
-        # Optional: Visualize all proposals (for debugging)
-        if st.checkbox("Show all region proposals (debug)"):
-            all_props_img = query_img.copy()
-            draw_props = ImageDraw.Draw(all_props_img)
-            for box in region_boxes:
-                draw_props.rectangle(box, outline="gray", width=1)
-            st.image(all_props_img, caption=f"All Region Proposals (Total: {len(region_boxes)})", use_column_width=True)
-    # --- Interactive thresholding and NMS on stored region proposals ---
-    if "region_boxes" in st.session_state and "region_distances" in st.session_state and "region_confidences" in st.session_state:
-        region_boxes = st.session_state["region_boxes"]
-        region_distances = st.session_state["region_distances"]
-        region_confidences = st.session_state["region_confidences"]
-        st.markdown("**Set Similarity Threshold for Region Matching**")
-        if region_distances:
-            min_dist = min(region_distances)
-            max_dist = max(region_distances)
-        else:
-            min_dist = 0
-            max_dist = 1
-        slider_val = st.slider(
-            "Threshold (relative to best match, region proposals)",
-            min_value=0.01, max_value=0.5, value=0.1, step=0.01,
-            help="Lower values = fewer, more confident detections."
-        )
-        threshold = min_dist + slider_val * (max_dist - min_dist)
-        st.write(f"Current threshold: {threshold:.4f}")
-        filtered_boxes = []
-        filtered_distances = []
-        filtered_confidences = []
-        for box, dist, conf in zip(region_boxes, region_distances, region_confidences):
-            if dist <= threshold:
-                filtered_boxes.append(box)
-                filtered_distances.append(dist)
-                filtered_confidences.append(conf)
-        # Visualize all filtered boxes before NMS
-        all_filtered_img = query_img.copy()
-        draw_filtered = ImageDraw.Draw(all_filtered_img)
-        for box, dist, conf in zip(filtered_boxes, filtered_distances, filtered_confidences):
-            draw_filtered.rectangle(box, outline="blue", width=2)
-            draw_filtered.text((box[0], box[1]), f"L2: {dist:.2f}\nConf: {conf:.2f}", fill="cyan")
-        st.image(all_filtered_img, caption=f"All Filtered Boxes Before NMS (Total: {len(filtered_boxes)})", use_column_width=True)
-        # 4. Apply NMS
-        nms_iou = st.slider("NMS IoU Threshold (region proposals)", min_value=0.1, max_value=0.9, value=0.3, step=0.02)
-        keep_indices = nms(filtered_boxes, filtered_distances, iou_threshold=nms_iou)
-        nms_boxes = [filtered_boxes[k] for k in keep_indices]
-        nms_distances = [filtered_distances[k] for k in keep_indices]
-        nms_confidences = [filtered_confidences[k] for k in keep_indices]
-        # 5. Draw results after NMS (expand boxes)
-        all_boxes_img = query_img.copy()
-        draw_all = ImageDraw.Draw(all_boxes_img)
-        img_w, img_h = all_boxes_img.size
-        for box, dist, conf in zip(nms_boxes, nms_distances, nms_confidences):
-            exp_box = expand_box(box, 0.1, img_w, img_h)  # Expand by 10%
-            draw_all.rectangle(exp_box, outline="orange", width=2)
-            draw_all.text((exp_box[0], exp_box[1]), f"L2: {dist:.2f}\nConf: {conf:.2f}", fill="yellow")
-        st.image(all_boxes_img, caption=f"Query Image with Region Proposal Matches After NMS (Total: {len(nms_boxes)})", use_column_width=True)
+    st.header("Step 3: Query Image Segmentation and Comparison Table")
+    if st.button("Segment Query Image with SAM and Compare Embeddings") or (
+        "query_segmentation_results" not in st.session_state and query_img is not None and "pattern_embedding" in st.session_state
+    ):
+        with st.spinner("Segmenting query image and extracting embeddings..."):
+            # Load SAM model and DINOv2 model
+            predictor = load_sam_model()
+            model, processor = load_dinov2_model()
+            # Use the filtered or original query image for segmentation
+            query_img_for_processing = st.session_state.get("query_img_for_processing", query_img)
+            image_np = np.array(query_img_for_processing)
+            if image_np.shape[2] == 4:
+                image_np = image_np[:, :, :3]
+            sam = predictor.model
+            mask_generator = SamAutomaticMaskGenerator(
+                sam,
+                points_per_side=32,  # higher for more segments
+                pred_iou_thresh=0.0,  # allow all masks
+                stability_score_thresh=0.0,  # allow all masks
+                min_mask_region_area=0  # include even large background
+            )
+            masks = mask_generator.generate(image_np)
+            st.write(f"Found {len(masks)} segments in query image.")
+            # --- Display the segmented image with all masks overlaid ---
+            import random
+            seg_vis = image_np.copy()
+            overlay = np.zeros_like(seg_vis, dtype=np.uint8)
+            for mask_dict in masks:
+                mask = mask_dict["segmentation"]
+                color = [random.randint(0,255) for _ in range(3)]
+                overlay[mask > 0] = color
+            alpha = 0.5
+            seg_vis = (seg_vis * (1 - alpha) + overlay * alpha).astype(np.uint8)
+            st.image(seg_vis, caption="Segmented Query Image (All Segments Overlaid)", use_column_width=True)
+            # For each mask, extract region and embedding
+            pattern_embedding = st.session_state["pattern_embedding"]
+            results = []
+            for idx, mask_dict in enumerate(masks):
+                mask = mask_dict["segmentation"]
+                region = extract_object_region(query_img_for_processing, mask)
+                if region is None:
+                    continue
+                emb = get_dinov2_embedding(region, model, processor)
+                cos_sim = cosine_similarity(pattern_embedding, emb)
+                l2 = l2_distance(pattern_embedding, emb)
+                results.append({
+                    "idx": idx,
+                    "cosine_similarity": cos_sim,
+                    "1-cosine_similarity": 1-cos_sim,
+                    "l2_distance": l2,
+                    "region_img": region,
+                    "embedding": emb,
+                })
+            # Sort by L2 distance (best match first)
+            results = sorted(results, key=lambda x: x["l2_distance"])
+            # Store results in session_state for later use
+            st.session_state["query_segmentation_results"] = {
+                "image_np": image_np,
+                "masks": masks,
+                "results": results,
+                "seg_vis": seg_vis,
+            }
+    # Use cached results if available
+    if "query_segmentation_results" in st.session_state:
+        image_np = st.session_state["query_segmentation_results"]["image_np"]
+        masks = st.session_state["query_segmentation_results"]["masks"]
+        results = st.session_state["query_segmentation_results"]["results"]
+        seg_vis = st.session_state["query_segmentation_results"]["seg_vis"]
+        st.image(seg_vis, caption="Segmented Query Image (All Segments Overlaid)", use_column_width=True)
+        # Display as a table
+        table_data = [{
+            "Segment #": r["idx"],
+            "Cosine Similarity": f"{r['cosine_similarity']:.4f}",
+            "1-Cosine Similarity": f"{r['1-cosine_similarity']:.4f}",
+            "L2 Distance": f"{r['l2_distance']:.4f}"
+        } for r in results]
+        st.subheader("Comparison Table (Pattern vs. Query Segments)")
+        st.dataframe(pd.DataFrame(table_data))
+        # Optionally, show the top-N segment images
+        st.markdown("**Top 5 Matching Segments (by L2 distance):**")
+        for r in results[:5]:
+            st.image(r["region_img"], caption=f"Segment #{r['idx']} | L2: {r['l2_distance']:.4f}", use_column_width=True)
+        # --- Detect all similar objects in the query image ---
+        st.markdown("**Detect All Similar Objects in Query Image**")
+        l2s = [r['l2_distance'] for r in results]
+        if l2s:
+            min_l2, max_l2 = float(min(l2s)), float(max(l2s))
+            default_thresh = min_l2 + 0.2 * (max_l2 - min_l2)
+            l2_thresh = st.slider("L2 Distance Threshold for Detection", min_value=float(min_l2), max_value=float(max_l2), value=float(default_thresh), step=0.01)
+            detected = [r for r in results if r['l2_distance'] <= l2_thresh]
+            st.write(f"Detected {len(detected)} similar objects (L2 ≤ {l2_thresh:.4f})")
+            # Overlay detected segments on the query image
+            overlay_img = image_np.copy()
+            bbox_list = []
+            for r in detected:
+                mask = masks[r['idx']]['segmentation']
+                # Find bounding box from mask
+                ys, xs = np.where(mask > 0)
+                if len(xs) > 0 and len(ys) > 0:
+                    x_min, x_max = int(xs.min()), int(xs.max())
+                    y_min, y_max = int(ys.min()), int(ys.max())
+                    # Draw rectangle (bounding box) on overlay_img
+                    # cv2.rectangle(overlay_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+                    confidence = 1 / (1 + r['l2_distance'])
+                    bbox_list.append({
+                        'x_min': x_min,
+                        'y_min': y_min,
+                        'x_max': x_max,
+                        'y_max': y_max,
+                        'l2_distance': r['l2_distance'],
+                        'confidence': confidence,
+                        'idx': r['idx'],
+                        'region_img': r['region_img']
+                    })
+            # --- Apply NMS to bbox_list ---
+            if bbox_list:
+                boxes = [(b['x_min'], b['y_min'], b['x_max'], b['y_max']) for b in bbox_list]
+                scores = [b['l2_distance'] for b in bbox_list]  # lower is better
+                keep_indices = nms(boxes, scores, iou_threshold=0.3)
+                nms_bboxes = [bbox_list[i] for i in keep_indices]
+                # Draw only NMS-filtered boxes
+                for b in nms_bboxes:
+                    cv2.rectangle(overlay_img, (b['x_min'], b['y_min']), (b['x_max'], b['y_max']), (0, 255, 0), 2)
+                st.image(overlay_img, caption="Query Image with NMS Bounding Boxes for Detected Similar Objects", use_column_width=True)
+                # Save NMS bounding boxes to CSV and provide download option
+                bbox_df = pd.DataFrame([{k: b[k] for k in ['x_min','y_min','x_max','y_max','l2_distance','confidence']} for b in nms_bboxes])
+                # Get query image name for file naming
+                query_img_name = None
+                if query_file is not None and hasattr(query_file, 'name'):
+                    query_img_name = os.path.splitext(os.path.basename(query_file.name))[0]
+                else:
+                    query_img_name = 'detected_bboxes'
+                csv_buffer = io.StringIO()
+                bbox_df.to_csv(csv_buffer, index=False)
+                csv_bytes = csv_buffer.getvalue().encode('utf-8')
+                st.download_button(
+                    label=f"Download Bounding Boxes CSV ({query_img_name}_nms.csv)",
+                    data=csv_bytes,
+                    file_name=f"{query_img_name}_nms.csv",
+                    mime='text/csv'
+                )
+                # Show each detected segment with confidence score (NMS only)
+                for b in nms_bboxes:
+                    st.image(b["region_img"], caption=f"Detected Segment #{b['idx']} | L2: {b['l2_distance']:.4f} | Confidence: {b['confidence']:.2f}", use_column_width=False, width=128)
 else:
     st.info("Upload a pattern image to enable annotation.") 
