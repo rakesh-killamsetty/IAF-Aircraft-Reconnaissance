@@ -9,7 +9,7 @@ This project is a Streamlit-based prototype for pattern-based object detection i
 - **Annotation:** Draw rectangles, circles, polygons, or freehand shapes on the pattern image to specify the object of interest.
 - **Segmentation (SAM):** Use Meta's Segment Anything Model (SAM) to segment the annotated object region.
 - **Embedding (DINOv2):** Extract feature embeddings from the segmented object using DINOv2 for robust pattern matching.
-- **Query Segmentation & Detection:** Segment the query image, extract embeddings for each segment, and compare them to the pattern embedding to find similar objects.
+- **Query Segmentation & Detection:** Segment the query image, extract embeddings for each segment, and compare them to the pattern embedding to find similar objects.**(Cosine Similarity, L2 Distance)**
 - **Non-Maximum Suppression (NMS):** Filter overlapping detections for cleaner results.
 - **Visualization:** View detected objects, their bounding boxes, and download results as a CSV file.
 
