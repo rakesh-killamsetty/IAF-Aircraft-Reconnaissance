@@ -13,9 +13,9 @@ This project is a Streamlit-based prototype for pattern-based object detection i
 - **Non-Maximum Suppression (NMS):** Filter overlapping detections for cleaner results.
 - **Visualization:** View detected objects, their bounding boxes, and download results as a CSV file.
 
-## Demo
+## Sample Input Image
 
-![Demo Screenshot](photos/Gemini_Generated_Image_snwpvmsnwpvmsnwp.png)
+![Demo Screenshot](input1.jpg)
 
 ## Output Image
 
