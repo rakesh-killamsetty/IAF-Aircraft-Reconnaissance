@@ -17,6 +17,10 @@ This project is a Streamlit-based prototype for pattern-based object detection i
 
 ![Demo Screenshot](photos/Gemini_Generated_Image_snwpvmsnwpvmsnwp.png)
 
+## Output Image
+
+![Output Screenshot](output1.jpg)
+
 ## Requirements
 
 - Python 3.8+
