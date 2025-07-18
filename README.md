@@ -19,7 +19,10 @@ This project is a Streamlit-based prototype for pattern-based object detection i
 
 ## Output Image
 
-![Output Screenshot](output1.jpg)
+![Output Screenshot](output2.jpg)
+
+## Detection Results In CSV Format
+![Output Screenshot](detection results csv format.jpg)
 
 ## Requirements
 
