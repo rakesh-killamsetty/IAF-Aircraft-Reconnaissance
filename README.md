@@ -15,7 +15,7 @@ This project is a Streamlit-based prototype for pattern-based object detection i
 
 ## Demo
 
-![Demo Screenshot](photos\Gemini_Generated_Image_snwpvmsnwpvmsnwp.png)
+![Demo Screenshot](photos/Gemini_Generated_Image_snwpvmsnwpvmsnwp.png)
 
 ## Requirements
 
